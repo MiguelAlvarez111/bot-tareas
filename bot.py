@@ -1,19 +1,25 @@
 import asyncio
 import os
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
-from database import insertar_tarea, obtener_tareas
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-# Cargar variables de entorno
+from db import SessionLocal, Tarea, init_db
+
+# ========================
+# CONFIG
+# ========================
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 
-# Estados del flujo
+
+# ========================
+# Estados del flujo FSM
+# ========================
 class TareaForm(StatesGroup):
     tipo = State()
     referencia = State()
@@ -22,7 +28,28 @@ class TareaForm(StatesGroup):
     nombre_reporte = State()
     descripcion = State()
 
-# Teclado de selección de tipo de tarea
+
+# ========================
+# Funciones BD
+# ========================
+def insertar_tarea(usuario, tipo, referencia, tiempo):
+    db = SessionLocal()
+    tarea = Tarea(usuario=usuario, tipo=tipo, referencia=referencia, tiempo=tiempo)
+    db.add(tarea)
+    db.commit()
+    db.close()
+
+
+def obtener_tareas():
+    db = SessionLocal()
+    tareas = db.query(Tarea).order_by(Tarea.fecha.desc()).all()
+    db.close()
+    return tareas
+
+
+# ========================
+# Teclado de tipos
+# ========================
 def tipo_tarea_keyboard():
     kb = InlineKeyboardBuilder()
     kb.button(text="📧 Correo", callback_data="correo")
@@ -32,12 +59,19 @@ def tipo_tarea_keyboard():
     kb.button(text="👥 Reunión", callback_data="reunion")
     kb.button(text="🗂 Auditoría", callback_data="auditoria")
     kb.button(text="📊 Reporte", callback_data="reporte")
-    kb.adjust(2)  # organiza en filas de 2
+    kb.adjust(2)
     return kb.as_markup()
 
+
+# ========================
+# MAIN BOT
+# ========================
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
+
+    # Inicializar DB
+    init_db()
 
     # /start
     @dp.message(Command("start"))
@@ -53,7 +87,7 @@ async def main():
         await state.set_state(TareaForm.tipo)
         await message.answer("📌 Selecciona el tipo de tarea:", reply_markup=tipo_tarea_keyboard())
 
-    # Callback de selección
+    # Callback selección tipo
     @dp.callback_query(TareaForm.tipo)
     async def set_tipo(callback: CallbackQuery, state: FSMContext):
         tipo = callback.data
@@ -80,35 +114,35 @@ async def main():
 
         await callback.answer()
 
-    # Referencia (correos, missing, escalados)
+    # Referencia
     @dp.message(TareaForm.referencia)
     async def set_referencia(message: Message, state: FSMContext):
         await state.update_data(referencia=message.text)
         await state.set_state(TareaForm.tiempo)
         await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 15min)")
 
-    # Descripción (consultas, reuniones)
+    # Descripción
     @dp.message(TareaForm.descripcion)
     async def set_descripcion(message: Message, state: FSMContext):
         await state.update_data(descripcion=message.text)
         await state.set_state(TareaForm.tiempo)
         await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 30min)")
 
-    # Auditoría (cantidad de tickets)
+    # Auditoría
     @dp.message(TareaForm.cantidad)
     async def set_cantidad(message: Message, state: FSMContext):
         await state.update_data(cantidad=message.text)
         await state.set_state(TareaForm.tiempo)
         await message.answer("⏱ ¿Cuánto tiempo tomó la auditoría? (ej: 5h)")
 
-    # Reportes (nombre del reporte)
+    # Reporte
     @dp.message(TareaForm.nombre_reporte)
     async def set_reporte(message: Message, state: FSMContext):
         await state.update_data(nombre_reporte=message.text)
         await state.set_state(TareaForm.tiempo)
         await message.answer("⏱ ¿Cuánto tiempo tomó hacer el reporte?")
 
-    # Tiempo final para todos
+    # Tiempo → registrar tarea
     @dp.message(TareaForm.tiempo)
     async def set_tiempo(message: Message, state: FSMContext):
         data = await state.get_data()
@@ -116,13 +150,11 @@ async def main():
         tipo = data.get("tipo")
         tiempo = message.text
 
-        # Variables opcionales según tipo
         referencia = data.get("referencia", "")
         descripcion = data.get("descripcion", "")
         cantidad = data.get("cantidad", "")
         reporte = data.get("nombre_reporte", "")
 
-        # Guardar en BD
         if tipo == "auditoria":
             referencia = f"{cantidad} tickets"
         elif tipo == "reporte":
@@ -142,7 +174,7 @@ async def main():
 
         await state.clear()
 
-    # /reporte → muestra últimas tareas y totales por categoría
+    # /reporte
     @dp.message(Command("reporte"))
     async def reporte(message: Message):
         tareas = obtener_tareas()
@@ -150,16 +182,13 @@ async def main():
             await message.answer("📭 No hay tareas registradas.")
             return
 
-        # Listado de últimas 5
         texto = "📋 Últimas tareas:\n\n"
         for t in tareas[:5]:
-            texto += f"👤 {t[1]} | 📌 {t[2]} | 🆔 {t[3]} | ⏱ {t[4]} | 📅 {t[5]}\n"
+            texto += f"👤 {t.usuario} | 📌 {t.tipo} | 🆔 {t.referencia} | ⏱ {t.tiempo} | 📅 {t.fecha}\n"
 
-        # Totales por categoría
         totales = {}
         for t in tareas:
-            tipo = t[2]
-            totales[tipo] = totales.get(tipo, 0) + 1
+            totales[t.tipo] = totales.get(t.tipo, 0) + 1
 
         texto += "\n📊 **Resumen por categoría:**\n"
         for tipo, cantidad in totales.items():
@@ -167,8 +196,8 @@ async def main():
 
         await message.answer(texto)
 
-    # Arrancar el bot
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
