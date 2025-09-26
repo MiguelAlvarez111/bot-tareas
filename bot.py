@@ -1,8 +1,9 @@
 import asyncio
 import os
 import re
+import pandas as pd
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
@@ -52,14 +53,27 @@ def obtener_tareas():
 # Validación de tiempo
 # ========================
 def validar_tiempo(texto: str) -> bool:
-    """
-    Solo acepta formatos con 'h' o 'min':
-    - 15min
-    - 2h
-    - 1h30min
-    """
     patron = re.compile(r'^(\d+h)?(\d+min)?$')
     return bool(patron.match(texto))
+
+
+# ========================
+# Exportar CSV
+# ========================
+def exportar_tareas_csv():
+    tareas = obtener_tareas()
+    data = [{
+        "Usuario": t.usuario,
+        "Tipo": t.tipo,
+        "Referencia": t.referencia,
+        "Tiempo": t.tiempo,
+        "Fecha": t.fecha.strftime("%Y-%m-%d %H:%M")
+    } for t in tareas]
+
+    df = pd.DataFrame(data)
+    archivo = "tareas.csv"
+    df.to_csv(archivo, index=False, encoding="utf-8-sig")
+    return archivo
 
 
 # ========================
@@ -79,18 +93,6 @@ def tipo_tarea_keyboard():
 
 
 # ========================
-# Utilidades
-# ========================
-def formatear_fecha(fecha):
-    return fecha.strftime("%d-%b %H:%M")  # Ej: 26-Sep 05:38
-
-
-def barra_visual(pct, max_bloques=20):
-    bloques = round(pct / 100 * max_bloques)
-    return "█" * bloques + "░" * (max_bloques - bloques)
-
-
-# ========================
 # MAIN BOT
 # ========================
 async def main():
@@ -105,7 +107,9 @@ async def main():
     async def start(message: Message):
         await message.answer(
             "👋 Hola, soy tu bot de bitácora de soporte.\n\n"
-            "Usa /tarea para registrar una actividad o /reporte para ver tus últimas tareas."
+            "Usa /tarea para registrar una actividad.\n"
+            "Usa /reporte para ver el resumen por categoría.\n"
+            "Usa /exportar para descargar todas tus tareas en CSV."
         )
 
     # /tarea → muestra botones
@@ -213,26 +217,30 @@ async def main():
             await message.answer("📭 No hay tareas registradas.")
             return
 
-        texto = "📋 **Últimas tareas registradas:**\n\n"
-        for i, t in enumerate(tareas[:5], start=1):
-            texto += (
-                f"{i}️⃣ {t.usuario} | 📌 {t.tipo.capitalize()} | 🆔 {t.referencia} | "
-                f"⏱ {t.tiempo} | 📅 {formatear_fecha(t.fecha)}\n"
-            )
-
-        # Resumen
         totales = {}
         for t in tareas:
             totales[t.tipo] = totales.get(t.tipo, 0) + 1
 
         total_tareas = sum(totales.values())
+        max_valor = max(totales.values())
+        escala = 20 / max_valor if max_valor > 20 else 1
 
-        texto += "\n📊 **Resumen por categoría:**\n"
+        texto = "📊 **Resumen por categoría:**\n"
         for tipo, cantidad in totales.items():
             porcentaje = (cantidad / total_tareas) * 100
-            texto += f"- {tipo.capitalize()}: {cantidad} ({porcentaje:.1f}%) {barra_visual(pct=porcentaje)}\n"
+            barras = "█" * int(cantidad * escala)
+            texto += f"- {tipo.capitalize()}: {cantidad} ({porcentaje:.1f}%) {barras}\n"
 
         await message.answer(texto, parse_mode="Markdown")
+
+    # /exportar
+    @dp.message(Command("exportar"))
+    async def exportar(message: Message):
+        archivo = exportar_tareas_csv()
+        await message.answer_document(
+            document=FSInputFile(archivo),
+            caption="📑 Aquí tienes todas tus tareas en CSV."
+        )
 
     await dp.start_polling(bot)
 
