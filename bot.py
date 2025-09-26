@@ -175,11 +175,16 @@ async def main():
         print(f"📩 /start de {message.from_user.username}")
         await message.answer("👋 Hola, soy tu bot de bitácora.\n"
                              "Comandos:\n"
-                             "• /tarea → registrar actividad\n"
-                             "• /reporte → tu resumen\n"
-                             "• /reporte_general → todos\n"
-                             "• /export → tu CSV\n"
-                             "• /export_general → CSV global")
+                             "• /tarea → Registrar una actividad\n"
+                             "• /reporte → Tu resumen personal\n"
+                             "• /reporte_hoy → Resumen de hoy (personal)\n"
+                             "• /reporte_fecha YYYY-MM-DD → Resumen de una fecha (personal)\n"
+                             "• /reporte_general → Resumen global\n"
+                             "• /reporte_hoy_general → Resumen global de hoy\n"
+                             "• /reporte_fecha_general YYYY-MM-DD → Resumen global de una fecha\n"
+                             "• /export → Descargar CSV personal\n"
+                             "• /export_general → Descargar CSV global"
+    )
 
     # /tarea
     @dp.message(Command("tarea"))
