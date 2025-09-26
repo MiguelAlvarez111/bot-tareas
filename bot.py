@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
@@ -45,6 +46,20 @@ def obtener_tareas():
     tareas = db.query(Tarea).order_by(Tarea.fecha.desc()).all()
     db.close()
     return tareas
+
+
+# ========================
+# Validación de tiempo
+# ========================
+def validar_tiempo(texto: str) -> bool:
+    """
+    Solo acepta formatos con 'h' o 'min':
+    - 15min
+    - 2h
+    - 1h30min
+    """
+    patron = re.compile(r'^(\d+h)?(\d+min)?$')
+    return bool(patron.match(texto))
 
 
 # ========================
@@ -119,32 +134,36 @@ async def main():
     async def set_referencia(message: Message, state: FSMContext):
         await state.update_data(referencia=message.text)
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 15min)")
+        await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 15min, 2h, 1h30min)")
 
     # Descripción
     @dp.message(TareaForm.descripcion)
     async def set_descripcion(message: Message, state: FSMContext):
         await state.update_data(descripcion=message.text)
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 30min)")
+        await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 15min, 2h, 1h30min)")
 
     # Auditoría
     @dp.message(TareaForm.cantidad)
     async def set_cantidad(message: Message, state: FSMContext):
         await state.update_data(cantidad=message.text)
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó la auditoría? (ej: 5h)")
+        await message.answer("⏱ ¿Cuánto tiempo tomó la auditoría? (ej: 15min, 2h, 1h30min)")
 
     # Reporte
     @dp.message(TareaForm.nombre_reporte)
     async def set_reporte(message: Message, state: FSMContext):
         await state.update_data(nombre_reporte=message.text)
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó hacer el reporte?")
+        await message.answer("⏱ ¿Cuánto tiempo tomó hacer el reporte? (ej: 15min, 2h, 1h30min)")
 
     # Tiempo → registrar tarea
     @dp.message(TareaForm.tiempo)
     async def set_tiempo(message: Message, state: FSMContext):
+        if not validar_tiempo(message.text):
+            await message.answer("⚠️ Formato inválido. Usa: 15min, 2h, 1h30min")
+            return
+
         data = await state.get_data()
         usuario = message.from_user.username or message.from_user.first_name
         tipo = data.get("tipo")
@@ -182,19 +201,29 @@ async def main():
             await message.answer("📭 No hay tareas registradas.")
             return
 
-        texto = "📋 Últimas tareas:\n\n"
-        for t in tareas[:5]:
-            texto += f"👤 {t.usuario} | 📌 {t.tipo} | 🆔 {t.referencia} | ⏱ {t.tiempo} | 📅 {t.fecha}\n"
+        texto = "📋 **Últimas tareas registradas:**\n\n"
+        for i, t in enumerate(tareas[:5], start=1):
+            texto += (
+                f"{i}️⃣ {t.usuario} | 📌 {t.tipo} | 🆔 {t.referencia} | "
+                f"⏱ {t.tiempo} | 📅 {t.fecha.strftime('%Y-%m-%d %H:%M')}\n"
+            )
 
+        # Resumen
         totales = {}
         for t in tareas:
             totales[t.tipo] = totales.get(t.tipo, 0) + 1
 
+        total_tareas = sum(totales.values())
+        max_valor = max(totales.values())
+        escala = 20 / max_valor if max_valor > 20 else 1
+
         texto += "\n📊 **Resumen por categoría:**\n"
         for tipo, cantidad in totales.items():
-            texto += f" - {tipo}: {cantidad}\n"
+            porcentaje = (cantidad / total_tareas) * 100
+            barras = "█" * int(cantidad * escala)
+            texto += f"- {tipo.capitalize()}: {cantidad} ({porcentaje:.1f}%) {barras}\n"
 
-        await message.answer(texto)
+        await message.answer(texto, parse_mode="Markdown")
 
     await dp.start_polling(bot)
 
