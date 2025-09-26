@@ -19,8 +19,21 @@ from db import SessionLocal, Tarea, init_db
 # ========================
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-
 print("🔧 Bot cargado con TOKEN:", "OK" if TOKEN else "NO TOKEN")
+
+
+# ========================
+# Utilidades
+# ========================
+def get_usuario(message: Message) -> str:
+    """Identidad consistente para guardar y filtrar."""
+    return (message.from_user.username
+            or message.from_user.first_name
+            or str(message.from_user.id))
+
+def md_escape(s: str) -> str:
+    """Escape mínimo para Markdown (evitar roturas)."""
+    return s.replace("_", "\\_").replace("*", "\\*")
 
 
 # ========================
@@ -37,52 +50,62 @@ class TareaForm(StatesGroup):
 
 
 # ========================
-# Funciones BD
+# Funciones BD (robustas)
 # ========================
 def insertar_tarea(usuario, tipo, referencia, tiempo):
     print(f"💾 Insertando tarea: usuario={usuario}, tipo={tipo}, ref={referencia}, tiempo={tiempo}")
     db = SessionLocal()
-    tarea = Tarea(usuario=usuario, tipo=tipo, referencia=referencia, tiempo=tiempo)
-    db.add(tarea)
-    db.commit()
-    db.close()
-    print("✅ Tarea guardada en BD")
+    try:
+        tarea = Tarea(usuario=usuario, tipo=tipo, referencia=referencia, tiempo=tiempo)
+        db.add(tarea)
+        db.commit()
+        print("✅ Tarea guardada en BD")
+    except Exception as e:
+        db.rollback()
+        print("❌ Error insertando tarea:", e)
+        raise
+    finally:
+        db.close()
 
 
 def obtener_tareas(usuario=None, fecha=None):
     print(f"📥 Obteniendo tareas -> usuario={usuario}, fecha={fecha}")
     db = SessionLocal()
-    query = db.query(Tarea).order_by(Tarea.fecha.desc())
-    if usuario:
-        query = query.filter(Tarea.usuario == usuario)
-    if fecha:
-        inicio = datetime.combine(fecha, datetime.min.time())
-        fin = datetime.combine(fecha, datetime.max.time())
-        query = query.filter(Tarea.fecha >= inicio, Tarea.fecha <= fin)
-    tareas = query.all()
-    db.close()
-    print(f"📊 {len(tareas)} tareas encontradas")
-    return tareas
+    try:
+        query = db.query(Tarea).order_by(Tarea.fecha.desc())
+        if usuario:
+            query = query.filter(Tarea.usuario == usuario)
+        if fecha:
+            inicio = datetime.combine(fecha, datetime.min.time())
+            fin = datetime.combine(fecha, datetime.max.time())
+            query = query.filter(Tarea.fecha >= inicio, Tarea.fecha <= fin)
+        tareas = query.all()
+        print(f"📊 {len(tareas)} tareas encontradas")
+        return tareas
+    finally:
+        db.close()
 
 
 # ========================
-# Validación y conversión de tiempo
+# Validación y conversión de tiempo (estricta)
 # ========================
+def _norm_time(s: str) -> str:
+    return s.strip().lower().replace(" ", "")
+
 def validar_tiempo(texto: str) -> bool:
-    return bool(re.match(r'^(\d+h)?(\d+min)?$', texto))
-
+    """
+    Acepta: 15min | 2h | 1h30min (sin espacios).
+    No acepta vacío ni formatos ambiguos.
+    """
+    s = _norm_time(texto)
+    return bool(re.match(r'^(?:\d+h(?:[0-5]?\dmin)?|\d+min)$', s))
 
 def convertir_a_minutos(texto: str) -> int:
-    horas = 0
-    minutos = 0
-    match = re.match(r'^(?:(\d+)h)?(?:(\d+)min)?$', texto)
-    if match:
-        if match.group(1):
-            horas = int(match.group(1))
-        if match.group(2):
-            minutos = int(match.group(2))
+    s = _norm_time(texto)
+    m = re.match(r'^(?:(\d+)h)?(?:(\d+)min)?$', s)
+    horas = int(m.group(1) or 0)
+    minutos = int(m.group(2) or 0)
     return horas * 60 + minutos
-
 
 def formatear_minutos(mins: int) -> str:
     h, m = divmod(mins, 60)
@@ -108,7 +131,7 @@ def tipo_tarea_keyboard():
 
 
 # ========================
-# Resumen de tareas
+# Resumen de tareas (ordenado + barras + % + tiempo)
 # ========================
 def generar_resumen(tareas):
     if not tareas:
@@ -128,10 +151,11 @@ def generar_resumen(tareas):
     escala = 20 / max_valor if max_valor > 20 else 1
 
     texto = "📊 **Resumen por categoría:**\n"
-    for tipo, cantidad in totales.items():
-        porcentaje = (cantidad / total_tareas) * 100
-        barras = "█" * int(cantidad * escala)
-        texto += f"- {tipo.capitalize()}: {cantidad} ({porcentaje:.1f}%) {barras} ({formatear_minutos(tiempos[tipo])})\n"
+    for tipo, cantidad in sorted(totales.items(), key=lambda x: x[1], reverse=True):
+        porcentaje = (cantidad / total_tareas) * 100 if total_tareas else 0
+        barras = "█" * max(1, int(cantidad * escala)) if cantidad else ""
+        tipo_mostrar = md_escape(tipo.capitalize())
+        texto += f"- {tipo_mostrar}: {cantidad} ({porcentaje:.1f}%) {barras} ({formatear_minutos(tiempos[tipo])})\n"
 
     texto += f"\n🕒 Tiempo total: {formatear_minutos(total_tiempo)}"
     return texto
@@ -150,7 +174,7 @@ def exportar_csv(tareas):
             "referencia": t.referencia,
             "tiempo": t.tiempo,
             "tiempo_minutos": convertir_a_minutos(t.tiempo),
-            "fecha": t.fecha.strftime("%Y-%m-%d %H:%M")
+            "fecha": t.fecha.strftime("%Y-%m-%d %H:%M"),
         })
     df = pd.DataFrame(data)
     buffer = io.StringIO()
@@ -173,23 +197,26 @@ async def main():
     @dp.message(Command("start"))
     async def start(message: Message):
         print(f"📩 /start de {message.from_user.username}")
-        await message.answer("👋 Hola, soy tu bot de bitácora.\n"
-                             "Comandos:\n"
-                             "• /tarea → Registrar una actividad\n"
-                             "• /reporte → Tu resumen personal\n"
-                             "• /reporte_hoy → Resumen de hoy (personal)\n"
-                             "• /reporte_fecha YYYY-MM-DD → Resumen de una fecha (personal)\n"
-                             "• /reporte_general → Resumen global\n"
-                             "• /reporte_hoy_general → Resumen global de hoy\n"
-                             "• /reporte_fecha_general YYYY-MM-DD → Resumen global de una fecha\n"
-                             "• /export → Descargar CSV personal\n"
-                             "• /export_general → Descargar CSV global"
-    )
+        await message.answer(
+            "👋 Hola, soy tu bot de bitácora.\n"
+            "Comandos:\n"
+            "• /tarea → Registrar una actividad\n"
+            "• /reporte → Tu resumen personal\n"
+            "• /reporte_hoy → Resumen de hoy (personal)\n"
+            "• /reporte_fecha YYYY-MM-DD → Resumen de una fecha (personal)\n"
+            "• /reporte_general → Resumen global\n"
+            "• /reporte_hoy_general → Resumen global de hoy\n"
+            "• /reporte_fecha_general YYYY-MM-DD → Resumen global de una fecha\n"
+            "• /export → Descargar CSV personal\n"
+            "• /export_general → Descargar CSV global"
+        )
 
-    # /tarea
+    # ========================
+    # Registrar tareas
+    # ========================
     @dp.message(Command("tarea"))
     async def iniciar_tarea(message: Message, state: FSMContext):
-        print(f"🟢 /tarea iniciado por {message.from_user.username}")
+        print(f"🟢 /tarea iniciado por {get_usuario(message)}")
         await state.set_state(TareaForm.tipo)
         await message.answer("📌 Selecciona el tipo de tarea:", reply_markup=tipo_tarea_keyboard())
 
@@ -201,68 +228,70 @@ async def main():
 
         if tipo in ["correo", "missing", "escalado", "llamada"]:
             await state.set_state(TareaForm.referencia)
-            await callback.message.answer("🆔 Dame el ID o referencia")
+            await callback.message.answer("🆔 Dame el ID o referencia (p. ej. FD12345)")
         elif tipo in ["consulta", "reunion"]:
             await state.set_state(TareaForm.descripcion)
-            await callback.message.answer("📝 Describe la tarea")
+            await callback.message.answer("📝 Describe brevemente la tarea")
         elif tipo == "auditoria":
             await state.set_state(TareaForm.cantidad)
-            await callback.message.answer("🗂 ¿Cuántos tickets fueron auditados?")
+            await callback.message.answer("🗂 ¿Cuántos tickets fueron auditados? (solo número)")
         elif tipo == "reporte":
             await state.set_state(TareaForm.nombre_reporte)
             await callback.message.answer("📊 Nombre del reporte")
         elif tipo == "agenda":
             await state.set_state(TareaForm.cantidad)
-            await callback.message.answer("📅 ¿Cuántos casos se ingresaron?")
+            await callback.message.answer("📅 ¿Cuántos casos se ingresaron? (solo número)")
 
         await callback.answer()
 
     @dp.message(TareaForm.referencia)
     async def set_referencia(message: Message, state: FSMContext):
-        await state.update_data(referencia=message.text)
+        await state.update_data(referencia=message.text.strip())
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó? (ej: 15min, 2h, 1h30min)")
+        await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
 
     @dp.message(TareaForm.descripcion)
     async def set_descripcion(message: Message, state: FSMContext):
-        await state.update_data(descripcion=message.text)
+        await state.update_data(descripcion=message.text.strip())
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó?")
+        await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
 
     @dp.message(TareaForm.cantidad)
     async def set_cantidad(message: Message, state: FSMContext):
+        cantidad_txt = message.text.strip()
+        if not cantidad_txt.isdigit():
+            return await message.answer("⚠️ Debe ser un número entero. Intenta de nuevo.")
+        await state.update_data(cantidad=cantidad_txt)
+
         data = await state.get_data()
         if data.get("tipo") == "agenda":
-            await state.update_data(cantidad=message.text)
             await state.set_state(TareaForm.facility)
             await message.answer("🏥 Ingresa el nombre del facility")
         else:
-            await state.update_data(cantidad=message.text)
             await state.set_state(TareaForm.tiempo)
-            await message.answer("⏱ ¿Cuánto tiempo tomó?")
+            await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
 
     @dp.message(TareaForm.facility)
     async def set_facility(message: Message, state: FSMContext):
-        await state.update_data(facility=message.text)
+        await state.update_data(facility=message.text.strip())
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó el ingreso de la agenda?")
+        await message.answer("⏱ ¿Cuánto tiempo tomó el ingreso de la agenda? (formato: 15min | 2h | 1h30min)")
 
     @dp.message(TareaForm.nombre_reporte)
     async def set_reporte(message: Message, state: FSMContext):
-        await state.update_data(nombre_reporte=message.text)
+        await state.update_data(nombre_reporte=message.text.strip())
         await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó?")
+        await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
 
     @dp.message(TareaForm.tiempo)
     async def set_tiempo(message: Message, state: FSMContext):
         if not validar_tiempo(message.text):
-            await message.answer("⚠️ Formato inválido. Usa: 15min, 2h, 1h30min")
-            return
+            return await message.answer("⚠️ Formato inválido. Usa: 15min, 2h o 1h30min (sin espacios)")
 
         data = await state.get_data()
-        usuario = message.from_user.username or message.from_user.first_name
+        usuario = get_usuario(message)
         tipo = data.get("tipo")
-        tiempo = message.text
+        tiempo = _norm_time(message.text)  # normalizamos lo que se guarda
 
         referencia = data.get("referencia", "") or ""
         descripcion = data.get("descripcion", "") or ""
@@ -280,13 +309,37 @@ async def main():
             referencia = f"{cantidad} casos en {facility}"
 
         insertar_tarea(usuario, tipo, referencia, tiempo)
-        await message.answer(f"✅ Guardado:\n👤 {usuario}\n📌 {tipo}\n🆔 {referencia}\n⏱ {tiempo}")
+        await message.answer(
+            f"✅ Guardado:\n"
+            f"👤 {md_escape(usuario)}\n"
+            f"📌 {md_escape(tipo)}\n"
+            f"🆔 {md_escape(referencia)}\n"
+            f"⏱ {md_escape(tiempo)}",
+            parse_mode="Markdown"
+        )
         await state.clear()
 
-    # Reportes
+    # ========================
+    # Reportes (personal y global, con fecha)
+    # ========================
     @dp.message(Command("reporte"))
     async def reporte(message: Message):
-        tareas = obtener_tareas(usuario=message.from_user.username)
+        tareas = obtener_tareas(usuario=get_usuario(message))
+        await message.answer(generar_resumen(tareas), parse_mode="Markdown")
+
+    @dp.message(Command("reporte_hoy"))
+    async def reporte_hoy(message: Message):
+        tareas = obtener_tareas(usuario=get_usuario(message), fecha=date.today())
+        await message.answer(generar_resumen(tareas), parse_mode="Markdown")
+
+    @dp.message(Command("reporte_fecha"))
+    async def reporte_fecha(message: Message):
+        try:
+            fecha_str = message.text.split(" ", 1)[1]
+            fecha = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        except Exception:
+            return await message.answer("⚠️ Usa el formato: /reporte_fecha YYYY-MM-DD")
+        tareas = obtener_tareas(usuario=get_usuario(message), fecha=fecha)
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
     @dp.message(Command("reporte_general"))
@@ -294,19 +347,42 @@ async def main():
         tareas = obtener_tareas()
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
-    # Export
+    @dp.message(Command("reporte_hoy_general"))
+    async def reporte_hoy_general(message: Message):
+        tareas = obtener_tareas(fecha=date.today())
+        await message.answer(generar_resumen(tareas), parse_mode="Markdown")
+
+    @dp.message(Command("reporte_fecha_general"))
+    async def reporte_fecha_general(message: Message):
+        try:
+            fecha_str = message.text.split(" ", 1)[1]
+            fecha = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        except Exception:
+            return await message.answer("⚠️ Usa el formato: /reporte_fecha_general YYYY-MM-DD")
+        tareas = obtener_tareas(fecha=fecha)
+        await message.answer(generar_resumen(tareas), parse_mode="Markdown")
+
+    # ========================
+    # Export CSV (personal y global)
+    # ========================
     @dp.message(Command("export"))
     async def exportar_personal(message: Message):
-        tareas = obtener_tareas(usuario=message.from_user.username)
+        usuario = get_usuario(message)
+        tareas = obtener_tareas(usuario=usuario)
         buffer = exportar_csv(tareas)
-        await message.answer_document(BufferedInputFile(buffer.getvalue().encode(), filename="tareas_personales.csv"))
+        csv_bytes = buffer.getvalue().encode()
+        filename = f"tareas_{usuario}_{date.today()}.csv"
+        await message.answer_document(BufferedInputFile(csv_bytes, filename=filename))
 
     @dp.message(Command("export_general"))
     async def exportar_todos(message: Message):
         tareas = obtener_tareas()
         buffer = exportar_csv(tareas)
-        await message.answer_document(BufferedInputFile(buffer.getvalue().encode(), filename="tareas_todos.csv"))
+        csv_bytes = buffer.getvalue().encode()
+        filename = f"tareas_todos_{date.today()}.csv"
+        await message.answer_document(BufferedInputFile(csv_bytes, filename=filename))
 
+    # Arranque del bot
     await dp.start_polling(bot)
 
 
