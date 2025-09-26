@@ -79,6 +79,18 @@ def tipo_tarea_keyboard():
 
 
 # ========================
+# Utilidades
+# ========================
+def formatear_fecha(fecha):
+    return fecha.strftime("%d-%b %H:%M")  # Ej: 26-Sep 05:38
+
+
+def barra_visual(pct, max_bloques=20):
+    bloques = round(pct / 100 * max_bloques)
+    return "█" * bloques + "░" * (max_bloques - bloques)
+
+
+# ========================
 # MAIN BOT
 # ========================
 async def main():
@@ -204,8 +216,8 @@ async def main():
         texto = "📋 **Últimas tareas registradas:**\n\n"
         for i, t in enumerate(tareas[:5], start=1):
             texto += (
-                f"{i}️⃣ {t.usuario} | 📌 {t.tipo} | 🆔 {t.referencia} | "
-                f"⏱ {t.tiempo} | 📅 {t.fecha.strftime('%Y-%m-%d %H:%M')}\n"
+                f"{i}️⃣ {t.usuario} | 📌 {t.tipo.capitalize()} | 🆔 {t.referencia} | "
+                f"⏱ {t.tiempo} | 📅 {formatear_fecha(t.fecha)}\n"
             )
 
         # Resumen
@@ -214,14 +226,11 @@ async def main():
             totales[t.tipo] = totales.get(t.tipo, 0) + 1
 
         total_tareas = sum(totales.values())
-        max_valor = max(totales.values())
-        escala = 20 / max_valor if max_valor > 20 else 1
 
         texto += "\n📊 **Resumen por categoría:**\n"
         for tipo, cantidad in totales.items():
             porcentaje = (cantidad / total_tareas) * 100
-            barras = "█" * int(cantidad * escala)
-            texto += f"- {tipo.capitalize()}: {cantidad} ({porcentaje:.1f}%) {barras}\n"
+            texto += f"- {tipo.capitalize()}: {cantidad} ({porcentaje:.1f}%) {barra_visual(pct=porcentaje)}\n"
 
         await message.answer(texto, parse_mode="Markdown")
 
