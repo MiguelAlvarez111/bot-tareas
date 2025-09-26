@@ -4,7 +4,7 @@ import re
 import io
 import pandas as pd
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
@@ -171,130 +171,17 @@ async def main():
         await message.answer("👋 Hola, soy tu bot de bitácora de soporte.\n\n"
                              "Usa /tarea para registrar una actividad.\n"
                              "Comandos disponibles:\n"
-                             "• /reporte → Tu resumen completo\n"
-                             "• /reporte_hoy → Solo hoy\n"
-                             "• /reporte_fecha YYYY-MM-DD → Una fecha\n"
+                             "• /reporte → Tu resumen personal\n"
+                             "• /reporte_hoy → Solo hoy (personal)\n"
+                             "• /reporte_fecha YYYY-MM-DD → Una fecha (personal)\n"
                              "• /reporte_general → Todos los usuarios\n"
+                             "• /reporte_hoy_general → Todos los usuarios (hoy)\n"
+                             "• /reporte_fecha_general YYYY-MM-DD → Todos los usuarios (fecha)\n"
                              "• /export → Descargar CSV personal\n"
                              "• /export_general → Descargar CSV general")
 
-    # /tarea → muestra botones
-    @dp.message(Command("tarea"))
-    async def iniciar_tarea(message: Message, state: FSMContext):
-        await state.set_state(TareaForm.tipo)
-        await message.answer("📌 Selecciona el tipo de tarea:", reply_markup=tipo_tarea_keyboard())
-
-    # Callback selección tipo
-    @dp.callback_query(TareaForm.tipo)
-    async def set_tipo(callback: CallbackQuery, state: FSMContext):
-        tipo = callback.data
-        await state.update_data(tipo=tipo)
-
-        if tipo == "correo":
-            await state.set_state(TareaForm.referencia)
-            await callback.message.answer("📧 Dame el ID de Freshdesk (ej: FD12345)")
-        elif tipo in ["missing", "escalado", "llamada"]:
-            await state.set_state(TareaForm.referencia)
-            await callback.message.answer("🆔 Dame el SIN o ID de Freshdesk relacionado")
-        elif tipo == "consulta":
-            await state.set_state(TareaForm.descripcion)
-            await callback.message.answer("❓ Describe brevemente la consulta")
-        elif tipo == "reunion":
-            await state.set_state(TareaForm.descripcion)
-            await callback.message.answer("👥 Describe la reunión (ej: Call con Houston)")
-        elif tipo == "auditoria":
-            await state.set_state(TareaForm.cantidad)
-            await callback.message.answer("🗂 ¿Cuántos tickets fueron auditados?")
-        elif tipo == "reporte":
-            await state.set_state(TareaForm.nombre_reporte)
-            await callback.message.answer("📊 Nombre del reporte (ej: Monthly Pending)")
-        elif tipo == "agenda":
-            await state.set_state(TareaForm.cantidad)
-            await callback.message.answer("📅 ¿Cuántos casos se ingresaron?")
-
-        await callback.answer()
-
-    # Referencia
-    @dp.message(TareaForm.referencia)
-    async def set_referencia(message: Message, state: FSMContext):
-        await state.update_data(referencia=message.text)
-        await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó?")
-
-    # Descripción
-    @dp.message(TareaForm.descripcion)
-    async def set_descripcion(message: Message, state: FSMContext):
-        await state.update_data(descripcion=message.text)
-        await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó?")
-
-    # Auditoría
-    @dp.message(TareaForm.cantidad)
-    async def set_cantidad(message: Message, state: FSMContext):
-        data = await state.get_data()
-        tipo = data.get("tipo")
-
-        if tipo == "agenda":
-            await state.update_data(cantidad=message.text)
-            await state.set_state(TareaForm.facility)
-            await message.answer("🏥 Ingresa el nombre del facility")
-        else:
-            await state.update_data(cantidad=message.text)
-            await state.set_state(TareaForm.tiempo)
-            await message.answer("⏱ ¿Cuánto tiempo tomó la auditoría?")
-
-    # Facility para agendas
-    @dp.message(TareaForm.facility)
-    async def set_facility(message: Message, state: FSMContext):
-        await state.update_data(facility=message.text)
-        await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó el ingreso de la agenda?")
-
-    # Reporte
-    @dp.message(TareaForm.nombre_reporte)
-    async def set_reporte(message: Message, state: FSMContext):
-        await state.update_data(nombre_reporte=message.text)
-        await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó hacer el reporte?")
-
-    # Tiempo → registrar tarea
-    @dp.message(TareaForm.tiempo)
-    async def set_tiempo(message: Message, state: FSMContext):
-        if not validar_tiempo(message.text):
-            await message.answer("⚠️ Formato inválido. Usa: 15min, 2h, 1h30min")
-            return
-
-        data = await state.get_data()
-        usuario = message.from_user.username or message.from_user.first_name
-        tipo = data.get("tipo")
-        tiempo = message.text
-
-        referencia = data.get("referencia", "")
-        descripcion = data.get("descripcion", "")
-        cantidad = data.get("cantidad", "")
-        reporte = data.get("nombre_reporte", "")
-        facility = data.get("facility", "")
-
-        if tipo == "auditoria":
-            referencia = f"{cantidad} tickets"
-        elif tipo == "reporte":
-            referencia = reporte
-        elif tipo in ["consulta", "reunion"]:
-            referencia = descripcion
-        elif tipo == "agenda":
-            referencia = f"{cantidad} casos en {facility}"
-
-        insertar_tarea(usuario, tipo, referencia, tiempo)
-
-        await message.answer(f"✅ Tarea registrada:\n"
-                             f"👤 {usuario}\n"
-                             f"📌 {tipo}\n"
-                             f"🆔 {referencia}\n"
-                             f"⏱ {tiempo}")
-        await state.clear()
-
     # ========================
-    # Comandos de reportes y export
+    # Comandos de reportes
     # ========================
     @dp.message(Command("reporte"))
     async def reporte(message: Message):
@@ -322,17 +209,36 @@ async def main():
         tareas = obtener_tareas()
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
+    @dp.message(Command("reporte_hoy_general"))
+    async def reporte_hoy_general(message: Message):
+        tareas = obtener_tareas(fecha=date.today())
+        await message.answer(generar_resumen(tareas), parse_mode="Markdown")
+
+    @dp.message(Command("reporte_fecha_general"))
+    async def reporte_fecha_general(message: Message):
+        try:
+            fecha_str = message.text.split(" ", 1)[1]
+            fecha = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        except:
+            await message.answer("⚠️ Usa el formato: /reporte_fecha_general YYYY-MM-DD")
+            return
+        tareas = obtener_tareas(fecha=fecha)
+        await message.answer(generar_resumen(tareas), parse_mode="Markdown")
+
+    # ========================
+    # Exportar CSV
+    # ========================
     @dp.message(Command("export"))
     async def exportar_personal(message: Message):
         tareas = obtener_tareas(usuario=message.from_user.username)
         buffer = exportar_csv(tareas)
-        await message.answer_document(FSInputFile(io.BytesIO(buffer.getvalue().encode()), filename="tareas_personales.csv"))
+        await message.answer_document(BufferedInputFile(buffer.getvalue().encode(), filename="tareas_personales.csv"))
 
     @dp.message(Command("export_general"))
     async def exportar_todos(message: Message):
         tareas = obtener_tareas()
         buffer = exportar_csv(tareas)
-        await message.answer_document(FSInputFile(io.BytesIO(buffer.getvalue().encode()), filename="tareas_todos.csv"))
+        await message.answer_document(BufferedInputFile(buffer.getvalue().encode(), filename="tareas_todos.csv"))
 
     await dp.start_polling(bot)
 
