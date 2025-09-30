@@ -66,6 +66,16 @@ def insertar_tarea(usuario, tipo, referencia, tiempo):
         raise
     finally:
         db.close()
+    with get_db() as db:
+        try:
+            tarea = Tarea(usuario=usuario, tipo=tipo, referencia=referencia, tiempo=tiempo)
+            db.add(tarea)
+            db.commit()
+            print("✅ Tarea guardada en BD")
+        except Exception as e:
+            db.rollback()
+            print("❌ Error insertando tarea:", e)
+            raise
 
 
 def obtener_tareas(usuario=None, fecha=None):
@@ -76,8 +86,10 @@ def obtener_tareas(usuario=None, fecha=None):
         if usuario:
             query = query.filter(Tarea.usuario == usuario)
         if fecha:
-            inicio = datetime.combine(fecha, datetime.min.time())
-            fin = datetime.combine(fecha, datetime.max.time())
+            # CAMBIO: Hacemos que el rango de fechas sea consciente de la zona horaria
+            tz = ZoneInfo("America/Bogota")
+            inicio = datetime.combine(fecha, datetime.min.time(), tzinfo=tz)
+            fin = datetime.combine(fecha, datetime.max.time(), tzinfo=tz)
             query = query.filter(Tarea.fecha >= inicio, Tarea.fecha <= fin)
         tareas = query.all()
         print(f"📊 {len(tareas)} tareas encontradas")
@@ -126,6 +138,8 @@ def tipo_tarea_keyboard():
     kb.button(text="🗂 Auditoría", callback_data="auditoria")
     kb.button(text="📊 Reporte", callback_data="reporte")
     kb.button(text="📅 Agenda", callback_data="agenda")
+    kb.button(text="📦 Seguimiento SQX", callback_data="seguimiento_sqx")
+    kb.button(text="📎 Otros", callback_data="otros")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -229,9 +243,13 @@ async def main():
         if tipo in ["correo", "missing", "escalado", "llamada"]:
             await state.set_state(TareaForm.referencia)
             await callback.message.answer("🆔 Dame el ID o referencia (p. ej. FD12345)")
-        elif tipo in ["consulta", "reunion"]:
+        # CAMBIO: Modificamos la lógica para incluir los nuevos tipos
+        elif tipo in ["consulta", "reunion", "otros"]:
             await state.set_state(TareaForm.descripcion)
             await callback.message.answer("📝 Describe brevemente la tarea")
+        elif tipo == "seguimiento_sqx":
+            await state.set_state(TareaForm.referencia)
+            await callback.message.answer("🆔 Ingresa el ID de la tarea de Squadlinx (SQX)")
         elif tipo == "auditoria":
             await state.set_state(TareaForm.cantidad)
             await callback.message.answer("🗂 ¿Cuántos tickets fueron auditados? (solo número)")
@@ -246,9 +264,16 @@ async def main():
 
     @dp.message(TareaForm.referencia)
     async def set_referencia(message: Message, state: FSMContext):
-        await state.update_data(referencia=message.text.strip())
-        await state.set_state(TareaForm.tiempo)
-        await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
+        data = await state.get_data()
+        if data.get("tipo") == "seguimiento_sqx":
+            await state.update_data(referencia=message.text.strip())
+            await state.set_state(TareaForm.descripcion)
+            await message.answer("📝 Añade una breve descripción del seguimiento (opcional, puedes poner 'N/A')")
+        else:
+            await state.update_data(referencia=message.text.strip())
+            await state.set_state(TareaForm.tiempo)
+            await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
+
 
     @dp.message(TareaForm.descripcion)
     async def set_descripcion(message: Message, state: FSMContext):
@@ -283,7 +308,6 @@ async def main():
         await state.set_state(TareaForm.tiempo)
         await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
 
-    @dp.message(TareaForm.tiempo)
     async def set_tiempo(message: Message, state: FSMContext):
         if not validar_tiempo(message.text):
             return await message.answer("⚠️ Formato inválido. Usa: 15min, 2h o 1h30min (sin espacios)")
@@ -291,23 +315,28 @@ async def main():
         data = await state.get_data()
         usuario = get_usuario(message)
         tipo = data.get("tipo")
-        tiempo = _norm_time(message.text)  # normalizamos lo que se guarda
+        tiempo = _norm_time(message.text)
 
-        referencia = data.get("referencia", "") or ""
+        referencia_val = data.get("referencia", "") or "" # Renombramos para evitar conflicto
         descripcion = data.get("descripcion", "") or ""
         cantidad = data.get("cantidad", "") or ""
         reporte = data.get("nombre_reporte", "") or ""
         facility = data.get("facility", "") or ""
 
+        # CAMBIO: Ajustamos la variable final 'referencia' según el tipo
         if tipo == "auditoria":
             referencia = f"{cantidad} tickets"
         elif tipo == "reporte":
             referencia = reporte
-        elif tipo in ["consulta", "reunion"]:
+        elif tipo in ["consulta", "reunion", "otros"]:
             referencia = descripcion
         elif tipo == "agenda":
             referencia = f"{cantidad} casos en {facility}"
-
+        elif tipo == "seguimiento_sqx":
+            referencia = f"SQX ID: {referencia_val} - {descripcion}"
+        else: # Para correo, missing, etc.
+            referencia = referencia_val
+            
         insertar_tarea(usuario, tipo, referencia, tiempo)
         await message.answer(
             f"✅ Guardado:\n"
