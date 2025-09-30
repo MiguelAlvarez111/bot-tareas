@@ -372,14 +372,7 @@ async def main():
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
     @dp.message(Command("reporte_general"))
-    async def reporte_general(me# 1. Añadir todos los cambios
-git add .
-
-# 2. Guardar los cambios con un mensaje claro
-git commit -m "feat: Añadir categorías SQX y Otros, y corregir zona horaria a Colombia"
-
-# 3. Subir los cambios para iniciar el despliegue
-git push origin mainssage: Message):
+    async def reporte_general(message: Message):
         tareas = obtener_tareas()
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
