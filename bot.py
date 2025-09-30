@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 
 from db import SessionLocal, Tarea, init_db
 
@@ -66,16 +67,6 @@ def insertar_tarea(usuario, tipo, referencia, tiempo):
         raise
     finally:
         db.close()
-    with get_db() as db:
-        try:
-            tarea = Tarea(usuario=usuario, tipo=tipo, referencia=referencia, tiempo=tiempo)
-            db.add(tarea)
-            db.commit()
-            print("✅ Tarea guardada en BD")
-        except Exception as e:
-            db.rollback()
-            print("❌ Error insertando tarea:", e)
-            raise
 
 
 def obtener_tareas(usuario=None, fecha=None):
@@ -308,6 +299,13 @@ async def main():
         await state.set_state(TareaForm.tiempo)
         await message.answer("⏱ ¿Cuánto tiempo tomó? (formato: 15min | 2h | 1h30min)")
 
+    # ... otros handlers ...
+
+    # AÑADIR ESTE DECORADOR PARA QUE LA FUNCIÓN SE EJECUTE
+    # ... otros handlers ...
+
+    # AÑADIR ESTE DECORADOR PARA QUE LA FUNCIÓN SE EJECUTE
+    @dp.message(TareaForm.tiempo)
     async def set_tiempo(message: Message, state: FSMContext):
         if not validar_tiempo(message.text):
             return await message.answer("⚠️ Formato inválido. Usa: 15min, 2h o 1h30min (sin espacios)")
@@ -348,6 +346,7 @@ async def main():
         )
         await state.clear()
 
+# ...
     # ========================
     # Reportes (personal y global, con fecha)
     # ========================
