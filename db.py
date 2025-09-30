@@ -29,8 +29,8 @@ class Tarea(Base):
     referencia = Column(String, nullable=True)
     tiempo = Column(String, nullable=False)
     # CAMBIO: Usamos una función lambda con la zona horaria correcta
-    fecha = Column(DateTime, default=lambda: datetime.now(ZoneInfo("America/Bogota")))
-
+    fecha = Column(DateTime(timezone=True), default=lambda: datetime.now(ZoneInfo("America/Bogota")))
+    
 # Inicializar la base de datos
 def init_db():
     Base.metadata.create_all(bind=engine)
