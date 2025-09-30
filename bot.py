@@ -57,7 +57,14 @@ def insertar_tarea(usuario, tipo, referencia, tiempo):
     print(f"💾 Insertando tarea: usuario={usuario}, tipo={tipo}, ref={referencia}, tiempo={tiempo}")
     db = SessionLocal()
     try:
-        tarea = Tarea(usuario=usuario, tipo=tipo, referencia=referencia, tiempo=tiempo)
+        # ESTE ES EL CAMBIO CRÍTICO: ESPECIFICAR LA FECHA CON LA ZONA HORARIA
+        tarea = Tarea(
+            usuario=usuario,
+            tipo=tipo,
+            referencia=referencia,
+            tiempo=tiempo,
+            fecha=datetime.now(ZoneInfo("America/Bogota")) # <-- Esta línea es la clave
+        )
         db.add(tarea)
         db.commit()
         print("✅ Tarea guardada en BD")
