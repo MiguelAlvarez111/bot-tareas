@@ -179,6 +179,10 @@ def generar_resumen(tareas):
 def exportar_csv(tareas):
     print(f"📤 Exportando {len(tareas)} tareas a CSV")
     data = []
+    
+    # Definimos la zona horaria a la que queremos convertir la fecha
+    tz_bogota = ZoneInfo("America/Bogota")
+
     for t in tareas:
         data.append({
             "usuario": t.usuario,
@@ -186,7 +190,9 @@ def exportar_csv(tareas):
             "referencia": t.referencia,
             "tiempo": t.tiempo,
             "tiempo_minutos": convertir_a_minutos(t.tiempo),
-            "fecha": t.fecha.strftime("%Y-%m-%d %H:%M"),
+            # ----- ESTA ES LA LÍNEA CLAVE DEL ARREGLO -----
+            # Convierte la fecha a la zona horaria de Bogotá ANTES de darle formato
+            "fecha": t.fecha.astimezone(tz_bogota).strftime("%Y-%m-%d %H:%M"),
         })
     df = pd.DataFrame(data)
     buffer = io.StringIO()
@@ -364,7 +370,9 @@ async def main():
 
     @dp.message(Command("reporte_hoy"))
     async def reporte_hoy(message: Message):
-        tareas = obtener_tareas(usuario=get_usuario(message), fecha=date.today())
+        # CAMBIO: Obtenemos la fecha actual de Colombia, no la del servidor
+        fecha_colombia = datetime.now(ZoneInfo("America/Bogota")).date()
+        tareas = obtener_tareas(usuario=get_usuario(message), fecha=fecha_colombia)
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
     @dp.message(Command("reporte_fecha"))
@@ -384,7 +392,9 @@ async def main():
 
     @dp.message(Command("reporte_hoy_general"))
     async def reporte_hoy_general(message: Message):
-        tareas = obtener_tareas(fecha=date.today())
+        # CAMBIO: Obtenemos la fecha actual de Colombia, no la del servidor
+        fecha_colombia = datetime.now(ZoneInfo("America/Bogota")).date()
+        tareas = obtener_tareas(fecha=fecha_colombia)
         await message.answer(generar_resumen(tareas), parse_mode="Markdown")
 
     @dp.message(Command("reporte_fecha_general"))
